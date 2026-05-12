@@ -7,11 +7,15 @@ var startTime = new Date();
 const MzX = 10; //X dimension of Maze
 const MzY = 10; //Y dimension of Maze
 var PICNUM = 3; //number of picture walls
+var DEAD_END_FREQ = 1; //show a dead-end image at 1 in every N dead ends (1=all, 2=half, 3=every third…)
+var DEADENDPICNUM = 0; //total dead-end picture walls (computed each maze)
 var POLYNUM = 6; //number of polyhedra
 var OPENNUM = 3; //number of floating opengl's
+var RATNUM = 5; //number of rats
 
 POLYNUM = Math.min(POLYNUM,MzX*MzY-4);
 OPENNUM = Math.min(OPENNUM,MzX*MzY-4-POLYNUM);
+RATNUM  = Math.min(RATNUM, MzX*MzY-4-POLYNUM-OPENNUM);
 
 var openplaces;
 var SX, SY;
@@ -25,9 +29,8 @@ var FinX, FinY;
 var eyeX, eyeY;
 var deyeX, deyeY;
 
-var ratX,ratY,ratdX,ratdY,rattheta,ratdtheta;
+var rats = []; // each element: [theta, X, Y, dtheta, dX, dY]
 
-var polytheta=0;
 var height =0;
 
 var near = 0.01;
@@ -41,6 +44,10 @@ var modelViewMatrixLoc, projectionMatrixLoc, scaleMatrixLoc;
 
 var NumVertices;
 var elgible;
+
+var deadEndTextures = []; // WebGL texture objects loaded from pic1.bmp, pic2.bmp, ...
+var deadEndPicCounts = []; // number of dead-end wall quads per texture
+var picGlTexture = null;  // WebGL texture object for pic.bmp (random wall pics)
 
 var lighting;
 
@@ -70,58 +77,6 @@ var vertexColors = [
     vec4( 1.0, 1.0, 1.0, 1.0 ),  // white
 ];
 
-var polyvert = [[
-	[0,0,1.225,1], 
-	[-0.5774,-1.000,-0.4082,1], 
-	[-0.5774,1.000,-0.4082,1], 
-	[1.155,0,-0.4082,1]],
-
-	[[-1.414,0,0,1], 
-	[0,1.414,0,1], 
-	[0,0,-1.414,1], 
-	[0,0,1.414,1], 
-	[0,-1.414,0,1], 
-	[1.414,0,0,1]],
-
-	[[0,0,-1.902,1], 
-	[0,0,1.902,1], 
-	[-1.701,0,-0.8507,1], 
-	[1.701,0,0.8507,1], 
-	[1.376,-1.000,-0.8507,1], 
-	[1.376,1.000,-0.8507,1], 
-	[-1.376,-1.000,0.8507,1], 
-	[-1.376,1.000,0.8507,1], 
-	[-0.5257,-1.618,-0.8507,1], 
-	[-0.5257,1.618,-0.8507,1], 
-	[0.5257,-1.618,0.8507,1], 
-	[0.5257,1.618,0.8507,1]],
-
-	[[-2.753,0,0.5257,1], 
-	[2.753,0,-0.5257,1], 
-	[-0.8507,-2.618,0.5257,1], 
-	[-0.8507,2.618,0.5257,1], 
-	[2.227,-1.618,0.5257,1], 
-	[2.227,1.618,0.5257,1], 
-	[-0.5257,-1.618,2.227,1], 
-	[-0.5257,1.618,2.227,1], 
-	[-1.376,-1.000,-2.227,1], 
-	[-1.376,1.000,-2.227,1], 
-	[1.376,-1.000,2.227,1], 
-	[1.376,1.000,2.227,1], 
-	[1.701,0,-2.227,1], 
-	[-2.227,-1.618,-0.5257,1], 
-	[-2.227,1.618,-0.5257,1], 
-	[-1.701,0,2.227,1], 
-	[0.5257,-1.618,-2.227,1], 
-	[0.5257,1.618,-2.227,1], 
-	[0.8507,-2.618,-0.5257,1], 
-	[0.8507,2.618,-0.5257,1]]]
-
-var polyind = [
-	[1,2,3,2,1,0,3,0,1,0,3,2],
-	[3,4,5,3,5,1,3,1,0,3,0,4,4,0,2,4,2,5,2,0,1,5,2,1],
-	[1,11,7,1,7,6,1,6,10,1,10,3,1,3,11,4,8,0,5,4,0,9,5,0,2,9,0,8,2,0,11,9,7,7,2,6,6,8,10,10,4,3,3,5,11,4,10,8,5,3,4,9,11,5,2,7,9,8,6,2],
-	[14,9,8,14,8,13,14,13,0,1,5,11,1,11,10,1,10,4,4,10,6,4,6,2,4,2,18,10,11,7,10,7,15,10,15,6,11,5,19,11,19,3,11,3,7,5,1,12,5,12,17,5,17,19,1,4,18,1,18,16,1,16,12,3,19,17,3,17,9,3,9,14,17,12,16,17,16,8,17,8,9,16,18,2,16,2,13,16,13,8,2,6,15,2,15,0,2,0,13,15,7,3,15,3,14,15,14,0]]
 
 function resizeCanvas() {
 	canvas.width  = window.innerWidth;
@@ -171,7 +126,8 @@ window.onload = function() {
 	gl.uniform1i(gl.getUniformLocation(program, "start"), 4);
 	gl.uniform1i(gl.getUniformLocation(program, "fin"), 5);
 	gl.uniform1i(gl.getUniformLocation(program, "open"), 6);
-	gl.uniform1i(gl.getUniformLocation(program, "rat"), 7); 
+	gl.uniform1i(gl.getUniformLocation(program, "rat"), 7);
+	gl.uniform1i(gl.getUniformLocation(program, "emote"), 8);
 
     //
     // Initialize textures
@@ -210,6 +166,7 @@ window.onload = function() {
 					gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, picImg);
 					gl.generateMipmap(gl.TEXTURE_2D);
 					gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+					picGlTexture = picTexture;
 
 					const startImg = new Image();
 					startImg.onload = function() {
@@ -247,9 +204,36 @@ window.onload = function() {
 									gl.generateMipmap(gl.TEXTURE_2D);
 									gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
 
-									render(); 
+									const emoteImg = new Image();
+									emoteImg.onload = function() {
+										const emoteTexture = gl.createTexture();
+										gl.activeTexture(gl.TEXTURE0+8);
+										gl.bindTexture(gl.TEXTURE_2D, emoteTexture);
+										gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, emoteImg);
+										gl.generateMipmap(gl.TEXTURE_2D);
+										gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+
+									// Probe for pic1.bmp, pic2.bmp, … — stop at the first missing file
+									function loadDeadEndTextures(index) {
+										var img = new Image();
+										img.onload = function() {
+											var tex = gl.createTexture();
+											gl.activeTexture(gl.TEXTURE3);
+											gl.bindTexture(gl.TEXTURE_2D, tex);
+											gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, img);
+											gl.generateMipmap(gl.TEXTURE_2D);
+											gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+											deadEndTextures.push(tex);
+											loadDeadEndTextures(index + 1);
+										};
+										img.onerror = function() { resetVars(); render(); };
+										img.src = './pic' + index + '.bmp';
+									}
+									loadDeadEndTextures(1);
+									};
+									emoteImg.src = './emote.png';
 								};
-								ratImg.src = './rat.png'; 
+								ratImg.src = './rat.png';
 							};
 							openImg.src = './gl.png'; 
 						};
@@ -293,10 +277,7 @@ function resetVars() {
 	SX1 = SX;
 	SY1 = SY;
 
-	ratdX=0;
-	ratdY=0;
-	rattheta=0;
-	ratdtheta=0;
+	rats=[];
 
 	//don't start facing a wall
 	if (maze[SY][SX][1]!=1){
@@ -334,9 +315,10 @@ function resetVars() {
 
 	[FinX,FinY] = openplaces.splice(Math.floor(Math.random() * openplaces.length),1)[0];
 	
-	[ratX,ratY] = openplaces.splice(Math.floor(Math.random() * openplaces.length),1)[0];
-	ratX+=.5;
-	ratY+=.5;
+	for (var i=0; i<RATNUM; i++) {
+		var rpos = openplaces.splice(Math.floor(Math.random() * openplaces.length),1)[0];
+		rats.push([0, rpos[0]+.5, rpos[1]+.5, 0, 0, 0]);
+	}
 	up = vec3(0.0, 0.0, 1.0);
 	
 	NumVertices=0;
@@ -352,6 +334,46 @@ function resetVars() {
 			}
 		}
 	}
+
+	// Find dead ends (exactly one open passage) and collect the wall that faces into the dead end
+	var deadEndFacingWalls = [];
+	for (var i = 0; i < MzY; i++) {
+		for (var j = 0; j < MzX; j++) {
+			var openCount = 0, openDir = -1;
+			for (var k = 0; k < 4; k++) {
+				if (maze[i][j][k] == 1) { openCount++; openDir = k; }
+			}
+			if (openCount == 1) {
+				// The facing wall is directly opposite the only open passage
+				deadEndFacingWalls.push([i, j, (openDir + 2) % 4]);
+			}
+		}
+	}
+	// Fisher-Yates shuffle so the 1-in-3 selection is random
+	for (var i = deadEndFacingWalls.length - 1; i > 0; i--) {
+		var j = Math.floor(Math.random() * (i + 1));
+		var tmp = deadEndFacingWalls[i];
+		deadEndFacingWalls[i] = deadEndFacingWalls[j];
+		deadEndFacingWalls[j] = tmp;
+	}
+	// Mark 1 in every DEAD_END_FREQ dead ends (skip entirely if no dead-end textures were found)
+	DEADENDPICNUM = deadEndTextures.length ? Math.floor(deadEndFacingWalls.length / Math.max(1, DEAD_END_FREQ)) : 0;
+	deadEndPicCounts = new Array(deadEndTextures.length).fill(0);
+	for (var i = 0; i < DEADENDPICNUM; i++) {
+		var pos = deadEndFacingWalls[i];
+		var texIdx = Math.floor(Math.random() * deadEndTextures.length);
+		deadEndPicCounts[texIdx]++;
+		// Encode texture index in maze value: 4 = first image, 5 = second, etc.
+		maze[pos[0]][pos[1]][pos[2]] = 4 + texIdx;
+		// Remove from elgible so regular PICNUM selection doesn't double-assign this face
+		for (var j = 0; j < elgible.length; j++) {
+			if (elgible[j][0]==pos[0] && elgible[j][1]==pos[1] && elgible[j][2]==pos[2]) {
+				elgible.splice(j, 1);
+				break;
+			}
+		}
+	}
+
 	if (PICNUM > elgible.length)
 		PICNUM = elgible.length;
 	for(var i=0; i<PICNUM;i++) {
@@ -429,21 +451,35 @@ function mazevertices()
 			if (maze[i][j][2]==3)
 				quad(vertices[5],vertices[6],vertices[2],vertices[1],3,0);
 			if (maze[i][j][3]==3)
-				quad(vertices[4],vertices[5],vertices[1],vertices[0],3,0);	
-		}		
+				quad(vertices[4],vertices[5],vertices[1],vertices[0],3,0);
+		}
+	}
+
+	// Process dead-end walls grouped by texture in reverse order so texture 0 lands first in buffer
+	for (var t = deadEndTextures.length - 1; t >= 0; t--) {
+		for (var i = 0; i < maze.length; i++) {
+			for (var j = 0; j < maze[0].length; j++) {
+				if (maze[i][j][0]==4+t || maze[i][j][1]==4+t || maze[i][j][2]==4+t || maze[i][j][3]==4+t) {
+					var dv = [
+						vec4( j  , i  , 1.0, 1.0 ),
+						vec4( j  , i+1, 1.0, 1.0 ),
+						vec4( j+1, i+1, 1.0, 1.0 ),
+						vec4( j+1, i  , 1.0, 1.0 ),
+						vec4( j  , i  , 0.0, 1.0 ),
+						vec4( j  , i+1, 0.0, 1.0 ),
+						vec4( j+1, i+1, 0.0, 1.0 ),
+						vec4( j+1, i  , 0.0, 1.0 )
+					];
+					if (maze[i][j][0]==4+t) quad(dv[0],dv[3],dv[7],dv[4],3,1);
+					if (maze[i][j][1]==4+t) quad(dv[6],dv[7],dv[3],dv[2],3,0);
+					if (maze[i][j][2]==4+t) quad(dv[5],dv[6],dv[2],dv[1],3,0);
+					if (maze[i][j][3]==4+t) quad(dv[4],dv[5],dv[1],dv[0],3,0);
+				}
+			}
+		}
 	}
 
 	quad([0,.5,0,1],[0,-.5,0,1],[0,-.5,1,1],[0,.5,1,1],0,0);
-
-    for ( var i = 0; i < polyind.length; ++i ) {
-    	for ( var j = 0; j < polyind[i].length; ++j ) {
-			point = mult(scalem(.125,.125,.125),polyvert[i][polyind[i][j]]);
-			pointsArray.push( point );
-			color=Math.floor(j/(3+6*(i==3)))/40;
-			colorsArray.push([color,color,color,1]);
-			texCoordsArray.push(texCoord[0][j%3]);
-    	}
-    }
 }
 
 function quad(a, b, c, d,t,f)
@@ -529,14 +565,29 @@ var render = function(){
 		[theta,eyeX,eyeY,dtheta,deyeX,deyeY]=nextMove(theta,eyeX,eyeY,dtheta,deyeX,deyeY);
 		[theta,eyeX,eyeY,dtheta,deyeX,deyeY]=nextMove(theta,eyeX,eyeY,dtheta,deyeX,deyeY);
 	}
-	[rattheta,ratX,ratY,ratdtheta,ratdX,ratdY]=nextMove(rattheta,ratX,ratY,ratdtheta,ratdX,ratdY);
-	while (ratdtheta){
-		[rattheta,ratX,ratY,ratdtheta,ratdX,ratdY]=nextMove(rattheta,ratX,ratY,ratdtheta,ratdX,ratdY);
+	for (var r=0; r<rats.length; r++) {
+		rats[r] = nextMove(...rats[r]);
+		while (rats[r][3]) { rats[r] = nextMove(...rats[r]); }
 	}
-    gl.uniform1i(gl.getUniformLocation(program, "i"),3);
-	gl.drawArrays( gl.TRIANGLES, 12, PICNUM*6);
+    // Draw each dead-end texture group, then the random pic walls, then plain walls
+    var deOffset = 12;
+    for (var t = 0; t < deadEndTextures.length; t++) {
+    	if (deadEndPicCounts[t] > 0) {
+    		gl.activeTexture(gl.TEXTURE3);
+    		gl.bindTexture(gl.TEXTURE_2D, deadEndTextures[t]);
+    		gl.uniform1i(gl.getUniformLocation(program, "i"), 3);
+    		gl.drawArrays(gl.TRIANGLES, deOffset, deadEndPicCounts[t]*6);
+    		deOffset += deadEndPicCounts[t]*6;
+    	}
+    }
+    if (PICNUM > 0) {
+    	gl.activeTexture(gl.TEXTURE3);
+    	gl.bindTexture(gl.TEXTURE_2D, picGlTexture);
+    	gl.uniform1i(gl.getUniformLocation(program, "i"), 3);
+    	gl.drawArrays(gl.TRIANGLES, 12+DEADENDPICNUM*6, PICNUM*6);
+    }
     gl.uniform1i(gl.getUniformLocation(program, "i"),0);
-	gl.drawArrays( gl.TRIANGLES, 12+PICNUM*6, NumVertices-PICNUM*6);
+	gl.drawArrays( gl.TRIANGLES, 12+(PICNUM+DEADENDPICNUM)*6, NumVertices-(PICNUM+DEADENDPICNUM)*6);
     
     gl.uniform1i(gl.getUniformLocation(program, "i"),4);
    	scaleMatrix=mult(scalem(1,1,height),mult(translate(SX1+.5,SY1+.5,0),rotateZ(theta/Math.PI*180)));
@@ -553,20 +604,21 @@ var render = function(){
 		gl.drawArrays( gl.TRIANGLES, NumVertices+12,6);
     }
     gl.uniform1i(gl.getUniformLocation(program, "i"),7);
-   	scaleMatrix=mult(scalem(1,1,height),mult(translate(ratX,ratY,0),mult(rotateZ(theta/Math.PI*180),scalem(.75,.75,.75))));
-    gl.uniformMatrix4fv( scaleMatrixLoc, false, flatten(scaleMatrix) );
-	gl.drawArrays( gl.TRIANGLES, NumVertices+12,6);
+    for (var r=0; r<rats.length; r++) {
+   		scaleMatrix=mult(scalem(1,1,height),mult(translate(rats[r][1],rats[r][2],0),mult(rotateZ(theta/Math.PI*180),scalem(.75,.75,.75))));
+    	gl.uniformMatrix4fv( scaleMatrixLoc, false, flatten(scaleMatrix) );
+		gl.drawArrays( gl.TRIANGLES, NumVertices+12,6);
+    }
     gl.uniform1i(gl.getUniformLocation(program, "i"),8);
-    polytheta+=2;
     for (i=0;i<polypos.length;i++){
-		scaleMatrix=mult(scalem(1,1,3/4),mult(translate(polypos[i][0]+.5,polypos[i][1]+.5,.25),rotateZ(polytheta)));
+		scaleMatrix=mult(scalem(1,1,height),mult(translate(polypos[i][0]+.5,polypos[i][1]+.5,0),mult(rotateZ(theta/Math.PI*180),scalem(.75,.75,.75))));
 	    gl.uniformMatrix4fv( scaleMatrixLoc, false, flatten(scaleMatrix) );
-		gl.drawArrays( gl.TRIANGLES, [12,24,48,108][polypos[i][2]]+6+NumVertices,[12,24,60,108][polypos[i][2]]);
+		gl.drawArrays( gl.TRIANGLES, NumVertices+12, 6);
     	if (!Math.round((polypos[i][0]+.5-eyeX)*1000)/1000 && !Math.round((polypos[i][1]+.5-eyeY)*1000)/1000) {
 			if (((Math.round(theta/Math.PI*180 *10000)/10000 %360 /90)+5)%2) {
 				up=vec3(mult(rotateX(2),vec4(up)));
 			} else {
-				up=vec3(mult(rotateY(2),vec4(up)));			
+				up=vec3(mult(rotateY(2),vec4(up)));
 			}
 			polypos.splice(i,1);
     	}
